@@ -117,13 +117,82 @@ rustup component add rust-src
 
 # 安装cargo工具
 cargo install cargo-binutils --vers =0.3.3
+#或者 cargo install cargo-binutils --version 0.3.3
 
 # 附加：更新和卸载Rust命令
 rustup update
 rustup self uninstall
 ```
 
-#### 3. 安装QEMU
+#### 3. 国内Rust下载慢的解决方法
+```bash
+# 参考rsproxy
+
+# 1. 编辑 bash 配置文件
+nano ~/.bashrc
+
+# 2. 在文件末尾添加以下两行（指定 Rustup 更新源）
+export RUSTUP_DIST_SERVER="https://rsproxy.cn"
+export RUSTUP_UPDATE_ROOT="https://rsproxy.cn/rustup"
+
+# 3. 保存退出，并让配置生效
+source ~/.bashrc
+
+# 4. 创建 Cargo 配置目录
+mkdir -p ~/.cargo
+
+# 5. 新建/编辑配置文件
+nano ~/.cargo/config.toml
+
+# 6. 粘贴以下内容（这是 rsproxy 的优化配置）：
+[source.crates-io]
+replace-with = 'rsproxy-sparse'
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[registries.rsproxy]
+index = "https://rsproxy.cn/crates.io-index"
+
+[net]
+git-fetch-with-cli = true
+
+# 7. 刷新环境
+source $HOME/.cargo/env
+
+
+# 如果是windows环境 处理方法类似
+# 1. 添加环境变量
+变量名 RUSTUP_DIST_SERVER
+变量值 https://rsproxy.cn
+
+变量名 RUSTUP_UPDATE_ROOT
+变量值 https://rsproxy.cn/rustup
+
+# 2.安装官网下载的rustup-init.exe
+
+# 3.配置Cargo源
+# 在C:\Users\你的用户名\.cargo 下新建config.toml文件，内容如下
+[source.crates-io]
+replace-with = 'rsproxy-sparse'
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[registries.rsproxy]
+index = "https://rsproxy.cn/crates.io-index"
+
+[net]
+git-fetch-with-cli = true
+```
+
+#### 4. 安装QEMU
 ```bash
 # 下载并解压QEMU，可能会出现SSL问题，重复尝试即可
 wget https://download.qemu.org/qemu-7.0.0.tar.xz
@@ -149,7 +218,7 @@ export PATH="$HOME/qemu-7.0.0/build/riscv64-linux-user:$PATH"
 source ~/.bashrc
 ```
 
-#### 4. 拉取代码并运行
+#### 5. 拉取代码并运行
 ```bash
 # 拉取仓库
 cd ~ 
@@ -159,4 +228,71 @@ git clone https://github.com/rcore-os/rCore-Tutorial-v3.git
 cd rCore-Tutorial-v3/
 cd os/
 make run
+```
+
+# 3. 配置Git
+
+#### 1. 安装git
+```bash
+# 更新源，并安装
+sudo apt update
+sudo apt install git -y
+git --version
+```
+
+#### 2. 全局基础配置（配置身份）
+```bash
+# 1. 设置用户名（建议与Github用户名一致）
+git config --global user.name "username"
+
+# 2. 设置邮箱
+git config --global user.email "email@gmail.com"
+
+# 3. 设置默认主分支名为 main (替代旧的 master)
+git config --global init.defaultBranch main
+
+# 4. 解决跨平台换行符问题 (Windows与Linux混用时非常重要)
+# 如果你在 Windows 上写代码：
+git config --global core.autocrlf true
+# 如果你在 WSL/Linux 上写代码 (推荐)：
+git config --global core.autocrlf input
+```
+
+#### 3. 配置SSH密钥（免密登录Github）
+```bash
+# 邮箱换成 GitHub 邮箱，-C 是注释，一直按回车确认即可
+ssh-keygen -t ed25519 -C "email@example.com"
+
+# 查看并复制输出的内容
+cat ~/.ssh/id_ed25519.pub
+
+# 将复制的内容，粘贴到Github上
+Setting -> SSH and GPG keys -> New SSH key
+
+# 验证连接，需要yes确认一下
+ssh -T git@github.com
+```
+
+#### 4. 创建仓库并上传本地代码
+```bash
+# A：从零开始
+# 1. 先在Github上新建仓库
+# 2. 在本地创建文件夹，并初始化，然后提交
+mkdir my_pro
+cd my_pro
+git init
+git add .
+git commit -m "First commit"
+git remote add origin git@github.com:用户名/仓库名.git
+git push -u origin main
+
+# B：已有本地代码，上传到仓库
+# 1. 先创建仓库
+# 2. 本地初始化并提交
+git init
+git add .
+git commit -m "Initial commit"
+git remote add origin git@github.com:用户名/仓库名.git
+git branch -M main
+git push -u origin main
 ```
