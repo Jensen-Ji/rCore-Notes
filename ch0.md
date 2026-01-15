@@ -311,8 +311,8 @@ git push -u origin main
 绿色：代表 用户态/App
 
 操作系统是软件，帮助用户和应用程序使用和管理计算机资源
-![ch0-001.excalidraw](ch0-001.excalidraw.md)
+![ch0-001.excalidraw](ch0-001.excalidraw.png)
 
 操作系统对用户是不可见的，但是它控制其他各种计算机系统
-![ch0-002.excalidraw](ch0-002.excalidraw.md)
+![ch0-002.excalidraw](ch0-002.excalidraw.png)
 
