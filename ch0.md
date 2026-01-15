@@ -2,7 +2,7 @@
 
 ## 1. 安装Ubuntu
 
-#### 在本地环境（win10）上使用WSL2来安装Ubuntu
+### 在本地环境（win10）上使用WSL2来安装Ubuntu
 
 ```powershell
 # 1. 启用WSL子系统功能
@@ -26,7 +26,7 @@ wsl --install -d Ubuntu-24.04
 
 其中 5、6两步可替换为 在Microsoft Store中下载Linux发行版
 
-#### 注：导出并在其他盘恢复
+### 注：导出并在其他盘恢复
 因为默认安装在C盘，可以创建快照导出，并在其他盘恢复快照，
 ```powershell
 # 0. 查看当前的Ubuntu版本
@@ -43,12 +43,18 @@ wsl --unregister Ubuntu-24.04
 
 # 4. 从压缩包创建一个新的WSL系统
 wsl --import Ubuntu D:\WSL\Ubuntu D:\WSL\Ubuntu.tar
+
+# 注：可能在迁移之后，会出现默认用户是root的情况，此时需要修改配置文件
+nano /etc/wsl.conf
+# 添加以下内容，然后保存退出，重启WSL
+[user]
+default = 用户名
 ```
 
 如此，安装的Ubuntu就从C盘迁移到了D:\WSL\Ubuntu。
 然后启动，设置用户名和密码即可。
 
-#### 附：注销和彻底删除Ubuntu后再重新安装
+### 附：注销和彻底删除Ubuntu后再重新安装
 ```powershell
 wsl --list --verbose
 wsl --terminate Ubuntu-24.04
@@ -58,7 +64,7 @@ wsl --install -d Ubuntu-24.04
 
 ## 2. 在Ubuntu中安装并配置实验环境
 
-#### 0. 换源
+### 0. 换源
 ```bash
 # 1. 备份原来的源配置文件
 sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources.bak 
@@ -74,7 +80,7 @@ sudo sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d
 sudo apt update
 ```
 
-#### 1. 基础环境准备（Linux）
+### 1. 基础环境准备（Linux）
 ```bash
 # 更新软件包列表并升级已安装软件
 sudo apt update && sudo apt upgrade -y
@@ -90,7 +96,7 @@ sudo apt install -y gawk bison flex texinfo gperf bc
 sudo apt install -y libmpc-dev libmpfr-dev libgmp-dev libglib2.0-dev libpixman-1-dev zlib1g-dev libexpat-dev
 ```
 
-#### 2. 安装Rust工具链
+### 2. 安装Rust工具链
 ```bash
 # 安装rustup，按回车默认即可
 curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
@@ -124,7 +130,7 @@ rustup update
 rustup self uninstall
 ```
 
-#### 3. 国内Rust下载慢的解决方法
+### 3. 国内Rust下载慢的解决方法
 ```bash
 # 参考rsproxy
 
@@ -192,7 +198,7 @@ index = "https://rsproxy.cn/crates.io-index"
 git-fetch-with-cli = true
 ```
 
-#### 4. 安装QEMU
+### 4. 安装QEMU
 ```bash
 # 下载并解压QEMU，可能会出现SSL问题，重复尝试即可
 wget https://download.qemu.org/qemu-7.0.0.tar.xz
@@ -218,7 +224,7 @@ export PATH="$HOME/qemu-7.0.0/build/riscv64-linux-user:$PATH"
 source ~/.bashrc
 ```
 
-#### 5. 拉取代码并运行
+### 5. 拉取代码并运行
 ```bash
 # 拉取仓库
 cd ~ 
@@ -230,9 +236,9 @@ cd os/
 make run
 ```
 
-# 3. 配置Git
+## 3. 配置Git
 
-#### 1. 安装git
+### 1. 安装git
 ```bash
 # 更新源，并安装
 sudo apt update
@@ -240,7 +246,7 @@ sudo apt install git -y
 git --version
 ```
 
-#### 2. 全局基础配置（配置身份）
+### 2. 全局基础配置（配置身份）
 ```bash
 # 1. 设置用户名（建议与Github用户名一致）
 git config --global user.name "username"
@@ -258,7 +264,7 @@ git config --global core.autocrlf true
 git config --global core.autocrlf input
 ```
 
-#### 3. 配置SSH密钥（免密登录Github）
+### 3. 配置SSH密钥（免密登录Github）
 ```bash
 # 邮箱换成 GitHub 邮箱，-C 是注释，一直按回车确认即可
 ssh-keygen -t ed25519 -C "email@example.com"
@@ -273,7 +279,7 @@ Setting -> SSH and GPG keys -> New SSH key
 ssh -T git@github.com
 ```
 
-#### 4. 创建仓库并上传本地代码
+### 4. 创建仓库并上传本地代码
 ```bash
 # A：从零开始
 # 1. 先在Github上新建仓库
@@ -296,3 +302,17 @@ git remote add origin git@github.com:用户名/仓库名.git
 git branch -M main
 git push -u origin main
 ```
+
+# 什么是操作系统
+
+图例示意：
+红色：代表 硬件/物理层
+蓝色：代表 内核态/OS
+绿色：代表 用户态/App
+
+操作系统是软件，帮助用户和应用程序使用和管理计算机资源
+![ch0-001.excalidraw](ch0-001.excalidraw.md)
+
+操作系统对用户是不可见的，但是它控制其他各种计算机系统
+![ch0-002.excalidraw](ch0-002.excalidraw.md)
+
