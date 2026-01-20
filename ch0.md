@@ -2,7 +2,7 @@
 
 ## 1. 安装Ubuntu
 
-### 在本地环境（win10）上使用WSL2来安装Ubuntu
+### 1. 在本地环境（win10）上使用WSL2来安装Ubuntu
 
 ```powershell
 # 1. 启用WSL子系统功能
@@ -26,7 +26,7 @@ wsl --install -d Ubuntu-24.04
 
 其中 5、6两步可替换为 在Microsoft Store中下载Linux发行版
 
-### 注：导出并在其他盘恢复
+### 2. 注：导出并在其他盘恢复
 因为默认安装在C盘，可以创建快照导出，并在其他盘恢复快照，
 ```powershell
 # 0. 查看当前的Ubuntu版本
@@ -54,7 +54,7 @@ default = 用户名
 如此，安装的Ubuntu就从C盘迁移到了D:\WSL\Ubuntu。
 然后启动，设置用户名和密码即可。
 
-### 附：注销和彻底删除Ubuntu后再重新安装
+### 3. 附：注销和彻底删除Ubuntu后再重新安装
 ```powershell
 wsl --list --verbose
 wsl --terminate Ubuntu-24.04
@@ -64,7 +64,7 @@ wsl --install -d Ubuntu-24.04
 
 ## 2. 在Ubuntu中安装并配置实验环境
 
-### 0. 换源
+### 1. 换源
 ```bash
 # 1. 备份原来的源配置文件
 sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources.bak 
@@ -80,7 +80,7 @@ sudo sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d
 sudo apt update
 ```
 
-### 1. 基础环境准备（Linux）
+### 2. 基础环境准备（Linux）
 ```bash
 # 更新软件包列表并升级已安装软件
 sudo apt update && sudo apt upgrade -y
@@ -96,7 +96,7 @@ sudo apt install -y gawk bison flex texinfo gperf bc
 sudo apt install -y libmpc-dev libmpfr-dev libgmp-dev libglib2.0-dev libpixman-1-dev zlib1g-dev libexpat-dev
 ```
 
-### 2. 安装Rust工具链
+### 3. 安装Rust工具链
 ```bash
 # 安装rustup，按回车默认即可
 curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
@@ -130,7 +130,7 @@ rustup update
 rustup self uninstall
 ```
 
-### 3. 国内Rust下载慢的解决方法
+### 4. 国内Rust下载慢的解决方法
 ```bash
 # 参考rsproxy
 
@@ -198,7 +198,7 @@ index = "https://rsproxy.cn/crates.io-index"
 git-fetch-with-cli = true
 ```
 
-### 4. 安装QEMU
+### 5. 安装QEMU
 ```bash
 # 下载并解压QEMU，可能会出现SSL问题，重复尝试即可
 wget https://download.qemu.org/qemu-7.0.0.tar.xz
@@ -224,7 +224,7 @@ export PATH="$HOME/qemu-7.0.0/build/riscv64-linux-user:$PATH"
 source ~/.bashrc
 ```
 
-### 5. 拉取代码并运行
+### 6. 拉取代码并运行
 ```bash
 # 拉取仓库
 cd ~ 
@@ -310,9 +310,77 @@ git push -u origin main
 蓝色：代表 内核态/OS
 绿色：代表 用户态/App
 
+## 1. 操作系统
+
 操作系统是软件，帮助用户和应用程序使用和管理计算机资源
-![ch0-001.excalidraw](ch0-001.excalidraw.png)
+![ch0-001.excalidraw](ch0-001.excalidraw.md)
 
 操作系统对用户是不可见的，但是它控制其他各种计算机系统
-![ch0-002.excalidraw](ch0-002.excalidraw.png)
+![ch0-002.excalidraw](ch0-002.excalidraw.md)
+
+## 2. 系统软件
+
+系统软件包括操作系统内核、驱动程序、工具软件、用户界面、软件库等
+操作系统内核是核心，负责控制硬件资源并为用户和应用程序提供服务
+驱动程序用于控制硬件设备，一般情况下，**驱动程序是操作系统内核的一部分**
+工具软件用于维护、调试和优化计算机系统
+用户界面用来帮助用户使用操作系统
+软件库提供系统调用的接口
+![ch0-003.excalidraw](ch0-003.excalidraw.md)
+
+在微内核架构中，驱动独立与内核之外
+在宏内核架构中，驱动包含在内核里面，或者作为模块加载进内核
+
+## 3. 执行环境
+
+在应用程序的角度：
+
+执行环境提供运行应用软件所需要的运行时服务
+包括：内存管理、文件系统访问、网络连接等，这些服务多数都由操作系统提供
+
+简化了操作系统的概念：**操作系统就是应用程序的软件执行环境。**
+软件在执行时，需要什么，操作系统就提供什么，也就是软件的执行环境。
+
+ABI：
+为什么是Binary，因为应用程序运行时，已经编译好了，是exe等形式，不是源码
+所以和应用程序沟通，不能使用API，也就是函数名
+需要使用寄存器、机器码指令等
+通过编译器把API变成ABI
+
+狭义的操作系统：操作系统内核
+广义的操作系统：内核+库+GUI+工具等
+
+![ch0-004.excalidraw](ch0-004.excalidraw.md)
+
+一般情况下，APP通过API调用库，库通过ABI调用内核
+在这里，APP通过ABI直接调用内核，也是rCore第一章要完成的
+
+**执行环境 = System Software + Hardware** 或者 **执行环境 = OS + Hardware**
+
+## 4. 操作系统的定义和组成
+
+![ch0-005.excalidraw](ch0-005.excalidraw.md)
+操作系统是向上为应用程序提供服务，向下管理硬件资源
+
+操作系统怎么和硬件打交道，怎么提供服务?
+
+操作系统主要组成：
+- 操作系统内核
+- 系统工具和软件库
+- 用户接口
+
+操作系统内核包括：
+- 进程线程管理
+- 内存管理
+- 文件系统
+- 网络通信
+- 设备驱动
+- 同步互斥
+- 系统调用接口
+
+这些也是rCore这本书讲述的重点
+
+# 操作系统的系统调用
+
+## API 和 ABI
 
