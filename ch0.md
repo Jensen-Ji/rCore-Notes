@@ -1,308 +1,3 @@
-# 实验环境
-
-## 1. 安装Ubuntu
-
-### 1. 在本地环境（win10）上使用WSL2来安装Ubuntu
-
-```powershell
-# 1. 启用WSL子系统功能
-dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
-
-# 2. 启用虚拟机平台组件
-dism.exe /online /enable-feature /featurename:VirtualMachinePlatform
-
-# 3. 更新WSL内核
-wsl --update
-
-# 4. 设置默认版本为WSL2
-wsl --set-default-version 2
-
-# 5. 列出云端可用的发行版
-wsl --list --online
-
-# 6. 下载指定的Linux发行版
-wsl --install -d Ubuntu-24.04
-```
-
-其中 5、6两步可替换为 在Microsoft Store中下载Linux发行版
-
-### 2. 注：导出并在其他盘恢复
-因为默认安装在C盘，可以创建快照导出，并在其他盘恢复快照，
-```powershell
-# 0. 查看当前的Ubuntu版本
-wsl --list
-
-# 1. 强制关闭Ubuntu
-wsl --terminate Ubuntu-24.04
-
-# 2. 将Ubuntu导出为一个压缩包
-wsl --export Ubuntu-24.04 D:\WSL\Ubuntu.tar
-
-# 3. 注销并和删除旧的Ubuntu
-wsl --unregister Ubuntu-24.04
-
-# 4. 从压缩包创建一个新的WSL系统
-wsl --import Ubuntu D:\WSL\Ubuntu D:\WSL\Ubuntu.tar
-
-# 注：可能在迁移之后，会出现默认用户是root的情况，此时需要修改配置文件
-nano /etc/wsl.conf
-# 添加以下内容，然后保存退出，重启WSL
-[user]
-default = 用户名
-```
-
-如此，安装的Ubuntu就从C盘迁移到了D:\WSL\Ubuntu。
-然后启动，设置用户名和密码即可。
-
-### 3. 附：注销和彻底删除Ubuntu后再重新安装
-```powershell
-wsl --list --verbose
-wsl --terminate Ubuntu-24.04
-wsl --unregister Ubuntu-24.04
-wsl --install -d Ubuntu-24.04
-```
-
-## 2. 在Ubuntu中安装并配置实验环境
-
-### 1. 换源
-```bash
-# 1. 备份原来的源配置文件
-sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources.bak 
-
-# 2. 使用 sed 命令一键替换网址 (将官网替换为阿里云镜像) 
-# 替换 archive.ubuntu.com -> mirrors.aliyun.com 
-sudo sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources 
-
-# 替换 security.ubuntu.com -> mirrors.aliyun.com 
-sudo sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources
-
-# 3. 更新索引
-sudo apt update
-```
-
-### 2. 基础环境准备（Linux）
-```bash
-# 更新软件包列表并升级已安装软件
-sudo apt update && sudo apt upgrade -y
-
-# 安装基础开发工具（git、编译器、python等）
-sudo apt install -y git build-essential ninja-build tmux curl python3 python3-pip
-
-# 安装自动化构建与解析工具（编译QEMU源码的工具）
-sudo apt install -y autoconf automake autotools-dev libtool pkg-config patchutils
-sudo apt install -y gawk bison flex texinfo gperf bc
-
-# 安装核心依赖库（QEMU运行需要）
-sudo apt install -y libmpc-dev libmpfr-dev libgmp-dev libglib2.0-dev libpixman-1-dev zlib1g-dev libexpat-dev
-```
-
-### 3. 安装Rust工具链
-```bash
-# 安装rustup，按回车默认即可
-curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
-
-# 上命令失败或卡住，可尝试如下
-export RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static
-export RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup
-curl https://sh.rustup.rs -sSf | sh
-
-# 安装完成后，刷新环境变量
-source $HOME/.cargo/env
-
-# 查看Rust版本
-rustc --version
-
-# 安装并切换到Nightly版本
-rustup install nightly
-rustup default nightly
-
-# 安装组件
-rustup target add riscv64gc-unknown-none-elf 
-rustup component add llvm-tools-preview 
-rustup component add rust-src
-
-# 安装cargo工具
-cargo install cargo-binutils --vers =0.3.3
-#或者 cargo install cargo-binutils --version 0.3.3
-
-# 附加：更新和卸载Rust命令
-rustup update
-rustup self uninstall
-```
-
-### 4. 国内Rust下载慢的解决方法
-```bash
-# 参考rsproxy
-
-# 1. 编辑 bash 配置文件
-nano ~/.bashrc
-
-# 2. 在文件末尾添加以下两行（指定 Rustup 更新源）
-export RUSTUP_DIST_SERVER="https://rsproxy.cn"
-export RUSTUP_UPDATE_ROOT="https://rsproxy.cn/rustup"
-
-# 3. 保存退出，并让配置生效
-source ~/.bashrc
-
-# 4. 创建 Cargo 配置目录
-mkdir -p ~/.cargo
-
-# 5. 新建/编辑配置文件
-nano ~/.cargo/config.toml
-
-# 6. 粘贴以下内容（这是 rsproxy 的优化配置）：
-[source.crates-io]
-replace-with = 'rsproxy-sparse'
-
-[source.rsproxy]
-registry = "https://rsproxy.cn/crates.io-index"
-
-[source.rsproxy-sparse]
-registry = "sparse+https://rsproxy.cn/index/"
-
-[registries.rsproxy]
-index = "https://rsproxy.cn/crates.io-index"
-
-[net]
-git-fetch-with-cli = true
-
-# 7. 刷新环境
-source $HOME/.cargo/env
-
-
-# 如果是windows环境 处理方法类似
-# 1. 添加环境变量
-变量名 RUSTUP_DIST_SERVER
-变量值 https://rsproxy.cn
-
-变量名 RUSTUP_UPDATE_ROOT
-变量值 https://rsproxy.cn/rustup
-
-# 2.安装官网下载的rustup-init.exe
-
-# 3.配置Cargo源
-# 在C:\Users\你的用户名\.cargo 下新建config.toml文件，内容如下
-[source.crates-io]
-replace-with = 'rsproxy-sparse'
-
-[source.rsproxy]
-registry = "https://rsproxy.cn/crates.io-index"
-
-[source.rsproxy-sparse]
-registry = "sparse+https://rsproxy.cn/index/"
-
-[registries.rsproxy]
-index = "https://rsproxy.cn/crates.io-index"
-
-[net]
-git-fetch-with-cli = true
-```
-
-### 5. 安装QEMU
-```bash
-# 下载并解压QEMU，可能会出现SSL问题，重复尝试即可
-wget https://download.qemu.org/qemu-7.0.0.tar.xz
-tar xvJf qemu-7.0.0.tar.xz
-
-# 附加：安装x86架构的QEMU
-sudo apt install qemu-system-x86
-
-# 编译，只编译RISC-V架构
-cd qemu-7.0.0
-./configure --target-list=riscv64-softmmu,riscv64-linux-user
-make -j$(nproc)
-
-# 配置环境变量
-# 先编辑.bashrc文件
-nano ~/.bashrc
-# 然后在文档最后，添加如下三行，然后ctrl+x，按Y，再按enter保存退出
-export PATH="$HOME/qemu-7.0.0/build:$PATH"
-export PATH="$HOME/qemu-7.0.0/build/riscv64-softmmu:$PATH"
-export PATH="$HOME/qemu-7.0.0/build/riscv64-linux-user:$PATH"
-
-#刷新环境变量
-source ~/.bashrc
-```
-
-### 6. 拉取代码并运行
-```bash
-# 拉取仓库
-cd ~ 
-git clone https://github.com/rcore-os/rCore-Tutorial-v3.git
-
-# 运行
-cd rCore-Tutorial-v3/
-cd os/
-make run
-```
-
-## 3. 配置Git
-
-### 1. 安装git
-```bash
-# 更新源，并安装
-sudo apt update
-sudo apt install git -y
-git --version
-```
-
-### 2. 全局基础配置（配置身份）
-```bash
-# 1. 设置用户名（建议与Github用户名一致）
-git config --global user.name "username"
-
-# 2. 设置邮箱
-git config --global user.email "email@gmail.com"
-
-# 3. 设置默认主分支名为 main (替代旧的 master)
-git config --global init.defaultBranch main
-
-# 4. 解决跨平台换行符问题 (Windows与Linux混用时非常重要)
-# 如果你在 Windows 上写代码：
-git config --global core.autocrlf true
-# 如果你在 WSL/Linux 上写代码 (推荐)：
-git config --global core.autocrlf input
-```
-
-### 3. 配置SSH密钥（免密登录Github）
-```bash
-# 邮箱换成 GitHub 邮箱，-C 是注释，一直按回车确认即可
-ssh-keygen -t ed25519 -C "email@example.com"
-
-# 查看并复制输出的内容
-cat ~/.ssh/id_ed25519.pub
-
-# 将复制的内容，粘贴到Github上
-Setting -> SSH and GPG keys -> New SSH key
-
-# 验证连接，需要yes确认一下
-ssh -T git@github.com
-```
-
-### 4. 创建仓库并上传本地代码
-```bash
-# A：从零开始
-# 1. 先在Github上新建仓库
-# 2. 在本地创建文件夹，并初始化，然后提交
-mkdir my_pro
-cd my_pro
-git init
-git add .
-git commit -m "First commit"
-git remote add origin git@github.com:用户名/仓库名.git
-git push -u origin main
-
-# B：已有本地代码，上传到仓库
-# 1. 先创建仓库
-# 2. 本地初始化并提交
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin git@github.com:用户名/仓库名.git
-git branch -M main
-git push -u origin main
-```
-
 # 什么是操作系统
 
 图例示意：
@@ -356,6 +51,7 @@ ABI：
 在这里，APP通过ABI直接调用内核，也是rCore第一章要完成的
 
 **执行环境 = System Software + Hardware** 或者 **执行环境 = OS + Hardware**
+本质上，执行环境就是程序运行所需要的全套服务。硬件+软件只是物理层面的概括。
 
 ## 4. 操作系统的定义和组成
 
@@ -382,5 +78,111 @@ ABI：
 
 # 操作系统的系统调用
 
-## API 和 ABI
+## 1. API 和 ABI
 
+>操作系统与运行在用户态软件之间的接口形式就是上一节提到的应用程序二进制接口 ABI。
+
+为这里是ABI而不是API
+API是**源码**层面的约定，通常用于APP内部或者APP和库之间的调用。
+ABI是**机器码/硬件**层面的约定，是APP和内核之间沟通的方式。
+因为软件在用户态，操作系统是内核态。跨层面的沟通需要使用ABI。
+
+>系统调用接口通常面向应用程序提供了 API 的描述，但在具体实现上，还需要提供 ABI 的接口描述规范
+
+人话：系统调用接口就是给程序员提供一个API接口，但是API接口的实现，实则是ABI接口的实现。
+
+操作系统提供了SCI接口，以API的形式在程序中被调用，然后实际执行的是ABI的功能。
+
+# 操作系统抽象
+
+## 1. 执行环境
+
+>执行环境 (Execution Environment) 是一个内涵很丰富且有一定变化的术语，它主要负责给在其上执行的软件提供相应的功能与资源，并可在计算机系统中形成多层次的执行环境。
+
+对于裸机硬件上的操作系统，操作系统的执行环境就是计算机硬件。
+应用程序通过访问函数库来完成功能，应用程序的执行环境就是函数库。函数库的执行环境还是计算机硬件。
+
+执行环境是分层的，谁在我的下面，谁就是我的执行环境。
+
+// todo 画图
+
+>CPU在执行过程中，可以在不同层次的执行环境之间切换，这称为 **执行环境切换**，执行环境切换通过调用API或ABI完成。
+
+就是每层都是“自以为独立的”，通过接口切换。
+
+>**应用程序的执行环境一个基本的定义**：执行环境是应用程序正确运行所需的服务与管理环境，用来完成应用程序在运行时的数据与资源管理、应用程序的生存期等方面的处理，它定义了应用程序有权访问的其他数据或资源，并决定了应用程序的行为限制范围。
+
+总结：应用程序 依赖于 它的执行环境提供的接口来运行。
+
+并不是：应用程序的执行环境就是接口，这是错误的。
+
+### 1. 普通控制流
+
+>在应用程序视角下，普通控制流只能接触到它所在的执行环境，不会跳到其他执行环境，所以应用程序执行基本上是以普通控制流的形式完成整个运行的过程。
+
+控制流：CPU执行指令的顺序。
+好比看小说，看的时候是第一行、第二行，看的顺序。
+
+普通控制流：程序按部就班的执行代码，一切都在程序员的掌握之中。
+
+### 2. 异常控制流
+
+异常控制流：应用程序执行过程中，因为各种原因，出现前一条代码还在应用程序代码段，下一条代码就出现在了操作系统的代码段，位于完全不同的位置，也就是不同的执行环境中。这种控制流脱离了所在的执行环境，并且发生了执行环境的切换，就是异常控制流。
+
+特征：瞬移、跨界
+
+>应用程序 感知 不到这种异常的控制流情况，这主要是由于操作系统把这种情况 透明 地进行了执行环境的切换和对各种异常情况的处理，让应用程序从始至终地 认为 没有这些异常控制流的产生。
+
+总结就是：异常控制流 导致了 执行环境的切换。
+反过来：通过异常控制流，达到了切换执行环境的目的
+
+### 3. 控制流上下文（执行环境的状态）
+
+发生执行环境切换的时候，先把现在的环境状态保存到一块安全的内存上，然后切换执行环境，等执行完，再从安全的内存上把之前的环境状态取回来。
+
+这个环境的状态就是控制流上下文，也就是CPU的寄存器快照。
+
+函数调用是普通控制流，由编译器来保存上下文，在生成汇编时自动加上push/pop指令，无需程序员关心。
+异常控制流是突变控制流，从APP跳到OS，由CPU和操作系统来保存上下文，必须由程序员编写汇编代码来保存。
+
+>操作系统需要处理三种异常控制流：外设中断、陷入、异常。
+
+### 4. 异常控制流：中断
+
+>外设 中断 (Interrupt) 是指由外部设备引起的外部 I/O 事件，如时钟中断、控制台中断等。外设中断是异步产生的，与处理器的执行无关。
+
+处理中断的流程：
+中断触发跳转到指定地址，保存上下文，处理中断，恢复上下文。
+
+### 5. 异常控制流：异常
+
+>异常 (Exception) 是在处理器执行指令期间检测到不正常的或非法的内部事件（如 x86 平台上的除零错、地址访问越界）。
+
+### 6. 异常控制流：陷入
+
+>陷入 (Trap) 是程序在执行过程中由于要通过系统调用请求操作系统服务而有意引发的事件。
+
+我的理解：我正在打游戏
+中断：妈妈敲门喊我吃饭，被动的，是外部干扰
+异常：电脑蓝屏了，被动的，是内部出错
+陷入：段位打不上去，主动暂停，找人帮忙上分，是主动的，我请求服务
+
+所以 陷入 就是应用程序主动找操作系统帮忙
+
+## 2. 进程
+
+进程是被加载到内存里、正在CPU上运行的程序。
+操作系统会把运行程序需要的东西，都放进进程这个容器里。
+进程是操作系统进行资源分配和调度的基本单位。
+
+## 3. 地址空间
+
+// todo
+
+## 4. 文件
+
+// todo
+
+# 操作系统特征
+
+// todo
