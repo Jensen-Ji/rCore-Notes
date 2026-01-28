@@ -254,8 +254,8 @@ global_asm!：这个内联汇编宏，接收一个字符串，然后将字符串
 `ALIGN(4K)`：对齐，摆放完一个代码段，必须凑整，以4096字节的倍数。
 
 ```
-OUTPUT_ARCH(riscv)           # 指明是给RISC-V架构
-ENTRY(_start)                # 程序的入口叫_start
+OUTPUT_ARCH(riscv)           # 设置目标平台为riscv
+ENTRY(_start)                # 程序的入口为_start
 BASE_ADDRESS = 0x80200000;   # 从0x80200000地址开始
 
 SECTIONS
@@ -264,7 +264,7 @@ SECTIONS
     skernel = .;             # start kernel,表示内核从此开始
 
     stext = .;               # start text,表示.text代码段的起点
-    .text : {
+    .text : {                # .text表示段名,与{}内的意义不同
         *(.text.entry)       # 先将.text.entry代码摆放在这里,确保位置在最前面
         *(.text .text.*)     # 然后将剩余的.text代码放在其后
     }
@@ -305,6 +305,100 @@ SECTIONS
 ```
 
 空白的纸，最上面画个线条，说这是入口，下面再画一条短一点的线，这条线叫text，下面是text段的代码，先放.text.entry，剩下的随意，然后把大小凑成整数倍，然后画条线，说text到这结束了。下面同理。
+
+
+然后去到os目录，编译程序
+```bash
+cargo build --release
+```
+
+使用file工具查看属性
+```bash
+file target/riscv64gc-unknown-none-elf/release/os
+```
+
+结果如下：
+```
+target/riscv64gc-unknown-none-elf/release/os: ELF 64-bit LSB executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), statically linked, not stripped
+```
+- ELF 64-bit：格式是ELF，是linux中通用的可执行文件格式。64位。
+- LSB：字节序是小端序
+- executable：可执行文件
+- UCB RISC-V：架构，UCB代表UC Berkeley，是给RISC-V处理器跑的
+- RVC：特性，RISC-V的缩写，说明它启用了压缩指令集，能把部分32位指令压缩16位
+- double-float ABI：浮点，它支持双精度浮点运算，对应了target名字里面的gc
+- statically linked：链接方式是静态链接，意味着没有任何外部依赖
+- not stripped：状态，未去符号，说明文件里还保留着所有的函数名、变量名。对于调试GDB非常重要，但是在最后生成`.bin`镜像时，这些信息会被丢弃。
+
+// todo 0x80200000可否改为其他地址
+
+// todo 静态链接和动态链接
+
+
+## 手动加载内核可执行文件
+
+错误做法：直接加载ELF
+因为ELF由两部分组成，metadata元数据和sections段。
+其中sections段的内容才是CPU要执行的指令和读写的数据。
+Qemu的-device loader是不具备解析ELF格式的能力，只会将整个ELF文件视作一个连续的二进制数据块，逐字节赋值到内存的目标地址`BASE_ADDR`，CPU就会将ELF头的数据作为指令来解码和执行，会导致错误。
+
+正确做法：加载剥离后
+是圆通rust-objcopy工具，从ELF文件中提取出所有可加载的段（由medatada元数据中的程序头表定义），按照它们在虚拟内存中的布局，拼接成一个连续的、不含元数据的二进制文件，也就是.bin文件。这个文件的第一个字节，就是链接脚本放在BASE_ADDR处的.text.entry段的第一条指令。Qemu会将.bin文件加载到目标地址。
+
+使用如下命令可以丢弃内核可执行文件中的元数据得到内核镜像
+```
+rust-objcopy --strip-all target/riscv64gc-unknown-none-elf/release/os -O binary target/riscv64gc-unknown-none-elf/release/os.bin
+```
+
+然后比较两个os文件，一个os是ELF文件，一个os.bin是最后生成的内核镜像
+```bash
+stat target/riscv64gc-unknown-none-elf/release/os
+  # File: target/riscv64gc-unknown-none-elf/release/os
+  # Size: 1312            Blocks: 8          IO Block: 4096   regular file
+
+stat target/riscv64gc-unknown-none-elf/release/os.bin
+  # File: target/riscv64gc-unknown-none-elf/release/os.bin
+  # Size: 4               Blocks: 8          IO Block: 4096   regular file
+```
+os.bin内核镜像的大小仅为4个字节，因为在entry.asm文件中有效的指令只有`li x1, 100`，这条伪指令翻译为真指令为`addi x1, x0, 100`，RISC-V架构中，一条标准的指令长度就是4字节。
+
+## 基于GDB验证
+调试需要用到gdb，安装在环境配置中，安装解压后，要进行其他配置
+**注意** 教程全程使用release模式进行构建，为了正常进行调试，请确认各项目（如 os , user 和 easy-fs ）的 Cargo.toml 中包含如下配置：
+```
+[profile.release]
+debug = true
+```
+否则在后面调试的时候，会如下：
+```
+No debugging symbols found in target/riscv64gc-unknown-none-elf/release/os
+```
+虽然打开了调试的文件，但是里面没有调试信息。就是因为在cargo build时，用的是--release模式，并且没有开启调试符号，release模式为了追求性能，默认会把调试信息扔掉。
+解决方法就是修改toml文件后，重新`cargo build --release`
+
+在os目录下通过如下命令启动Qemu并加载RustSBI和内核镜像os.bin
+```
+qemu-system-riscv64 \
+    -machine virt \
+    -nographic \
+    -bios ../bootloader/rustsbi-qemu.bin \
+    -device loader,file=target/riscv64gc-unknown-none-elf/release/os.bin,addr=0x80200000 \
+    -s -S
+```
+-s可以使Qemu监听本地TCP端口1234等待GDB客户端连接。
+-S可以使Qemu在收到GDB的请求后再开始运行。
+所以执行完此条命令，Qemu没有任何输出。如果想直接运行，只需要去掉-s -S即可
+
+
+
+
+
+
+
+
+
+
+
 
 
 
