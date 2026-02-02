@@ -188,7 +188,7 @@ $ qemu-system-riscv64 \
 Rust编译器生成的代码假设栈指针SP已经指向了合法的内存区域，而在内核启动的瞬间，硬件并未自动设置好栈。因此需要一段手写的汇编代码entry.asm作为极简运行时，负责在执行Rust代码前建立栈环境。
 SP指针的变化，在执行RustSBI时，SP指向RustSBI内部的栈，属于M模式资源，在跳转进入内核时，也就切换到了S模式，此时SP寄存器的值是过时的，这是一个特权级越界的危险指针，不可用，必须将SP重置为属于内核的栈顶地址。
 
-# 建立和初始化栈
+# 内存布局和栈
 
 内存布局分为两部分，数据部分和代码部分
 代码部分：
@@ -245,11 +245,269 @@ RISC-V架构的栈，是从高地址向低地址增长的。
 `_start :`：符号标记的位置，冒号`:`是定义标签的语法，代表的就是内存地址，假设代码被加载到了0x80200000，那么_start就对于0x80200000。
 
 `la sp boot_stack_top`：设置SP指向栈顶。
+`la`：是一个伪指令，RISC-V的单条指令长度固定是32位，装不下64位的完整地址。所以编译器会把la替换成两条真指令，auipc加载高位+addi加载低位。
 
+`.space`：占空间
 
+为什么要把栈放在.bss段，前面说.bss存放未初始化数据，为什么栈要放在这
+如果把栈放在.data段，这64kb的全0数据就会占满ELF文件体积。
+放在.bss段，在ELF文件里只要记录需要64kb，不占磁盘空间。
+虽然转成bin后还是占的。
 
 什么是符号表
 符号表的本质是一个数据结构，存在编译出来的目标文件中，记录了代码里所有名字和地址的对应关系。
 作用：链接器要把目标文件链接在一起，遇到函数调用时，如call命令，就会去查表，然后把call指令的目标填上函数在符号表中的地址，这就是链接的过程。
 
+# 嵌入汇编
 
+栈的创建和初始化写好了，但是Rust编译器不认识汇编文件，只认识rs文件。那么entry.asm怎么编译进去
+解决方法：嵌入汇编
+嵌入汇编：告知编译器在编译的时候，把entry.asm这个文件的文本内容，原封不动的粘贴到Rust代码的全局作用域中，并且把它当成全局汇编代码处理。
+
+在main.rs文件中加入以下代码：
+```rust
+use core::arch::global_asm;
+global_asm!(include_str!("entry.asm"));
+```
+include_str!：这是一个宏，会在编译期读取entry.asm的内容，把它变成字符串。等同于直接在rs文件里写汇编，不过现在这样更优雅。
+global_asm!：这个内联汇编宏，接收一个字符串，然后将字符串扔给底层的汇编器。
+
+为什么用`global_asm!`而不是`asm宏!`
+`asm!`是局部内联汇编，它嵌入在某个函数内部，它的限制是函数的执行需要栈帧，但是entry.asm的任务正是初始化栈。
+`global_asm!`全局汇编，它定义的汇编代码是脱离在任何Rust函数之外的，不依赖栈或上下文。
+
+# 链接脚本
+
+在默认情况下，Rust编译器和链接器生成的是适用于通用操作系统的程序，其内存布局是动态或者虚拟的。
+但是要写的是OS，必须自己掌控内存的内容，需要强制将内核的第一条指令固定在0x80200000，因此就需要编写链接脚本。
+
+修改.cargo/config.toml文件，通过传递参数调整链接器行为。
+```toml
+[target.riscv64gc-unknown-none-elf]
+rustflags = [
+    "-Clink-arg=-Tsrc/linker.ld", "-Cforce-frame-pointers=yes"
+]
+```
+`[target.riscv64gc-unknown-none-elf]`表示下面的配置仅对目标平台生效。
+`rustflags = [...]`：`[...]`的内容是要传递给编译器的额外参数。
+`"-Clink-arg=-Tsrc/linker.ld"`：让编译器告知链接器，使用脚本的规则。
+- -C：Codegen（代码生成）选项
+- link-arg：告知编译器，后面的参数转交给链接器
+- -T：指定Script脚本
+- src/linker.ld：要传递的脚本文件
+`"-Cforce-frame-pointers=yes"`：强制生成**帧指针**，作用是方便以后的调试。
+如果不生成帧指针，编译器为了优化性能，可能会把记录函数调用链的fp寄存器另作他用。这样的话，如果函数崩溃，很难查出问题。生成栈指针，虽然性能微跌，但是可以完美回溯堆栈。
+没有FP时，栈帧之间没有固定的链表，编译器只知道当前栈顶在哪里，一旦发生panic，就回不去上一层的函数了。
+有FP时，FP寄存器就是导航，当前函数的FP保存着调用者函数的FP位置，只要顺着FP找下去，就能把整个调用栈串起来。
+
+告知Rust工具链，用提供的脚本来安排内存地址，保留栈指针来查Bug。
+
+然后就是编写脚本了
+
+```
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+BASE_ADDRESS = 0x80200000;
+
+SECTIONS
+{
+    . = BASE_ADDRESS;
+    skernel = .;
+
+    stext = .;
+    .text : {
+        *(.text.entry)
+        *(.text .text.*)
+    }
+    . = ALIGN(4K);
+    etext = .;
+    
+    srodata = .;
+    .rodata : {
+        *(.rodata .rodata.*)
+        *(.srodata .srodata.*)
+    }
+    . = ALIGN(4K);
+    erodata = .;
+    
+    sdata = .;
+    .data : {
+        *(.data .data.*)
+        *(.sdata .sdata.*)
+    }
+    . = ALIGN(4K);
+    edata = .;
+    
+    .bss : {
+        *(.bss.stack)
+        sbss = .;
+        *(.bss .bss.*)
+        *(.sbss .sbss.*)
+    }
+    . = ALIGN(4K);
+    ebss = .;
+    
+    ekernel = .;
+    
+    /DISCARD/ : {
+        *(.eh_frame)
+    }
+}
+```
+
+这个脚本的作用就是，把代码里的各种段，按照顺序摆在正确位置
+`.`：当前地址的指针，代表当前数据填充到内存的哪个地址了。
+`*`：通配符，代表所有的，`*(.text)`就表示文件里的所有代码段。
+`ALIGN(4K)`：对齐，摆放完一个代码段，必须凑整，凑成4096字节的倍数。
+
+`OUTPUT_ARCH(riscv)`：确认架构
+`ENTRY(_START)`：告知GDB调试器，程序的第一条指令在哪里。Qemu其实不看这个，但是调试有用。
+`BASE_ADDRESS = 0x80200000`：定义一个常量
+
+`. = 0x80200000`： 此时指针指向0x80200000
+`stext = .` 给0x80200000起了个符号叫stext，现在stext就代表这个地址
+`.text : {...}`：塞入一堆代码，占用了一些字节，此时.会跟着变化
+`etext = . `：给当前地址起名叫etext，etext以后就代表这个地址
+
+`.text : { *(.text.entry) *(.text .text.*) }`
+冒号左边`.text`，这是输出端，是指最终生成的os.bin文件里，这个大段的名字。
+冒号右边`{}`内，这是输入段，是指从各个目标文件里抓取来的段。
+创建一个叫.text的大空间，先在目标文件里把叫.text.entry的文件放在最前面，然后再把其他所有目标文件里叫.text的放在后面。
+
+为什么要`ALIGN(4K)`
+为了后续的分页机制，后续会将.text段设为只读、可执行。.data段设为可读写、不可执行。
+RISC-V的页表权限控制粒度是4KB，如果代码和数据挤在同一个页面里，就没法单独给它们设置不同的权限了。
+
+为什么sbss放在.bss.stack后面？
+目的是让后续的clear_bss函数在清零内存时，自动跳过内核栈，只清零真正的全局变量部分。
+
+```
+/DISCARD/ : {
+        *(.eh_frame)
+    }
+```
+Rust编译器默认会生成.eh_frame用于堆栈展开（处理panic时的报错信息）。
+但是在内核里，手写了panic处理，用不上这个复杂的标准机制。
+为了减小内核的体积，直接丢弃
+
+![ch1-006](ch1-006.md)
+
+现在链接脚本完成了，去`cargo build --release`，生成os
+
+# 手动加载内核可执行文件
+
+使用file工具查看刚才生成的文件
+```bash
+$ file target/riscv64gc-unknown-none-elf/release/os
+target/riscv64gc-unknown-none-elf/release/os: ELF 64-bit LSB executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), statically linked, with debug_info, not stripped
+```
+- ELF 64-bit：格式是ELF，是linux中通用的可执行文件格式。64位。
+- LSB：字节序是小端序
+- executable：可执行文件
+- UCB RISC-V：架构，UCB代表UC Berkeley，是给RISC-V处理器跑的
+- RVC：特性，RISC-V压缩指令集的缩写，说明它启用了压缩指令集，能把部分32位指令压缩16位。能显著减小内核的体积，从而提高Cache的命中率。
+- double-float ABI：浮点，它支持双精度浮点运算，对应了target名字里面的gc
+- statically linked：链接方式是静态链接，意味着没有任何外部依赖
+- not stripped：状态，未去符号，说明文件里还保留着所有的函数名、变量名。对于调试GDB非常重要，但是在最后生成`.bin`镜像时，这些信息会被丢弃。
+
+此时，如果直接用qemu加载该程序
+如果是真实机器上，会崩溃。因为CPU会直接从0x80200000取指令执行，但是ELF文件开头是文件头（Header），里面只有一堆描述信息，而不是汇编指令。CPU会把Header数据当指令去执行，触发非法指令异常，直接崩溃。
+在Qemu上，Qemu比较聪明，自带ELF解析器，如果使用`-kernel os`启动，qemu会自动读取ELF头，把代码搬运到正确的内存位置，跳过Header。
+但是为了模拟真实的流程，以及配合RustSBI，需要把纯净的代码烧录到内存。
+
+怎么从ELF剥离到需要的bin文件
+使用rust-objcopy工具，这步过程叫提取二进制镜像。
+ELF文件是给调试器GDB看的，内容包含文件头、段表、符号表等元数据。
+Bin是给CPU跑的，里面只有指令和数据。这个文件的第一个字节，就是链接脚本放在BASE_ADDR处的.text.entry段的第一条指令。Qemu会将.bin文件加载到目标地址。
+
+使用如下命令可以丢弃内核可执行文件中的元数据得到内核镜像
+```
+$ rust-objcopy --strip-all target/riscv64gc-unknown-none-elf/release/os -O binary target/riscv64gc-unknown-none-elf/release/os.bin
+```
+
+可以使用stat工具比较ELF和Bin文件的大小。
+```
+$ stat target/riscv64gc-unknown-none-elf/release/os
+$ stat target/riscv64gc-unknown-none-elf/release/os.bin
+```
+
+在os目录下通过如下命令启动Qemu并加载RustSBI和内核镜像os.bin
+```
+$ qemu-system-riscv64 \
+    -machine virt \
+    -nographic \
+    -bios ../bootloader/rustsbi-qemu.bin \
+    -device loader,file=target/riscv64gc-unknown-none-elf/release/os.bin,addr=0x80200000 \
+    -s -S
+```
+-s可以使Qemu监听本地TCP端口1234等待GDB客户端连接。
+-S可以使Qemu在收到GDB的请求后再开始运行。
+所以执行完此条命令，Qemu没有任何输出。如果想直接运行，只需要去掉-s -S即可
+
+# 工程化构建
+
+使用Makefle，把编译、裁剪、运行这一套流程简化成简单的命令
+首先在和os同目录下创建bootloader目录，然后安装rustsbi。
+在os目录下，创建Makefile文件
+```
+# --- 变量定义 ---
+# 目标平台架构
+TARGET := riscv64gc-unknown-none-elf
+# 编译模式 (release / debug)
+MODE := release
+# 内核 ELF 文件路径
+KERNEL_ELF := target/$(TARGET)/$(MODE)/os
+# 内核 Bin 文件路径
+KERNEL_BIN := $(KERNEL_ELF).bin
+# Bootloader 路径
+BOOTLOADER := ../bootloader/rustsbi-qemu.bin
+
+# --- 命令封装 ---
+
+# 默认目标：只编译
+all: build
+
+# 1. 编译：执行 cargo build
+build:
+	@echo "Building kernel..."
+	cargo build --$(MODE)
+
+# 2. 转换：依赖 build，生成 .bin 文件
+binary: build
+	@echo "Stripping binary..."
+	rust-objcopy --strip-all $(KERNEL_ELF) -O binary $(KERNEL_BIN)
+
+# 3. 运行：依赖 binary，启动 QEMU
+run: binary
+	@echo "Running QEMU..."
+	qemu-system-riscv64 \
+		-machine virt \
+		-nographic \
+		-bios $(BOOTLOADER) \
+		-device loader,file=$(KERNEL_BIN),addr=0x80200000
+
+# 4. 调试：依赖 binary，启动 QEMU 并开启 GDB 监听
+debug: binary
+	@echo "Running QEMU in debug mode..."
+	qemu-system-riscv64 \
+		-machine virt \
+		-nographic \
+		-bios $(BOOTLOADER) \
+		-device loader,file=$(KERNEL_BIN),addr=0x80200000 \
+		-s -S
+
+# 清理构建
+clean:
+	cargo clean
+
+# 声明伪目标 (防止目录下有同名文件导致冲突)
+.PHONY: all build binary run debug clean
+```
+
+此后，可以使用make build，make run等命令直接构建或运行内核
+
+# 初始化栈
+
+现在内核以及可以在qemu虚拟机上运行了。
+
+但是.bss段还未初始化，
