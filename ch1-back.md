@@ -510,4 +510,113 @@ clean:
 
 现在内核以及可以在qemu虚拟机上运行了。
 
-但是.bss段还未初始化，
+但是.bss段还未初始化，现在初始化.bss。
+在main.rs里写一个clear_bss函数
+```rust
+fn clear_bss() {
+    unsafe extern "C" {
+        fn sbss();
+        fn ebss();
+    }
+
+    let start_addr = sbss as *const () as usize;
+    let end_addr = ebss as *const () as usize;
+
+    for a in start_addr..end_addr {
+        unsafe {
+            let ptr = a as *mut u8;
+            ptr.write_volatile(0);
+        }
+    }
+}
+```
+`fn sbss()`：这里的sbss虽然声明为函数，但是不用调用它，而是要获取它在内存中的位置。ebss同理。
+
+`let ptr = a as *mut u8`：把数字地址转换为裸指针（`*mut u8`）。
+
+`ptr.write_volatile(0)`：为什么不写`*ptr = 0`，如果这样写，编译器可能会自作聪明，它发现我向内存写入了数据，但是并没有读取这块数据，就会觉得这行代码多余，然后把整个循环当空气。Volatile的作用是告诉编译器，不管后面有没有用到这里，比如实打实的写入。
+
+# 函数调用
+
+从call rust_main这一刻，栈的生命开始了
+
+涉及三个角色：
+- 硬件（CPU）：执行指令，操作寄存器
+- 调用者（caller）：发起调用的函数或汇编代码
+- 被调用者（callee）：被调用的函数或编译器生成的代码
+
+从RustSBI跳转到0x80200000，也就是_start处，开始执行指令
+`la sp, boot_stack_top`：SP指针指向栈顶，栈的内容是全空的或者是乱码。
+
+`call rust_main`：此时CPU在操作，栈没有变化，call指令不压栈，它只改变寄存器。ra寄存器保存了下一条指令的地址（call rust_main的下一条指令），pc寄存器直接跳到了rust_main的第一行代码。
+
+此时跳到了rust_main的第一行，编译器生成的代码开始执行。
+编译器可能会用到寄存器，但是它不能破坏之前的数据，还要保存回家的路（ra寄存器的值）。
+编译器生成的汇编就会进行如下操作
+1. 开辟空间，`addi sp, sp, -16`，假设分配16个字节，那么SP会从`top`下降到`top-16`。这16个字节就是rust_main的栈帧。
+2. 保存现场
+-  `sd ra, 8(sp)`，功能是保存返回地址。此时是rust_main在操作，也就是软件在操作，把CPU存在ra寄存器里的地址，也就是回家的路抄写在栈上。
+- `sd s0, 0(sp)`，功能是保存旧的栈底指针FP，虽然这里_start没有FP。
+
+然后rust_main会调用clear_bss，此时pc指向的指令是`call clear_bss`
+CPU再次将当前的pc+4的地址写入ra寄存器，也就是call clear_bss的下一条指令。此时ra的值就被覆盖了，不过刚才rust_main将其保存在了栈中。
+
+然后CPU进入了clear_bss，新建栈帧开始构建，开辟空间，SP继续下降。
+保存ra也就是回rust_main的地址，也就是call clear_bss的下一条指令。
+保存s0寄存器，也就是rust_main的栈帧基址。
+保存局部变量，如果寄存器不够用，编译器会把start_addr和end_addr这些变量也写进栈里。
+
+然后执行函数的内容，初始化bss
+
+clear_bss函数完成，函数要返回
+恢复现场：把回rust_main的地址读回寄存器ra，也就是call clear_bss的下一条指令
+回收空间：把SP指针向上收回，回到rust_main栈帧的边界
+跳转回家：CPU根据ra寄存器跳回call clear_bss的下一条指令
+
+![ch1-007](ch1-007.md)
+
+# 基于SBI实现输出和关机
+
+什么是SBI，为什么要用SBI实现
+实现输出和关机，本质上是在调用BIOS固件提供的服务，在RISC-V架构中，这个机制叫做SBI。
+内核是运行在S模式，但是直接控制硬件，比如通过给串口寄存器写数据来打印字符，或者控制电源管理芯片关机，都需要更高的权限，也就是M模式。
+SBI就是为了解决这个问题诞生的中间层。
+RustSBI是M模式，运行在最高权限，知道底层的硬件细节。
+内核是S模式，不知道硬件细节，想要打印字符，只需通过SBI让RustSBI打印即可。
+
+修改os/Cargo.toml，加入依赖，之后cargo会下载这个包。
+```toml
+[dependencies]
+sbi-rt = { version = "0.0.2", features = ["legacy"] }
+```
+目前sbi-rt有新版本，但是教程里的体系就是0.0.2版本，因此`features=["legacy"]`是需要的，因为`console_putchar`和`shutdown`都属于legacy扩展，默认是不开启的。
+
+在main.rs里声明sbi模块
+```
+mod sbi;
+```
+新建一个os/sbi.rs文件，用于编写sbi相关功能
+```rust
+pub fn console_putchar(c:usize){
+    #[allow(deprecated)]
+    sbi_rt::legacy::console_putchar(c);
+}
+```
+`#[allow(deprecated)]`：因为用的是旧版本的标准，编译器看到会提示，加上属性表示坚持要用旧的接口。
+
+然后实现关机功能
+```rust
+pub fn shutdown(failure: bool) -> ! {
+    use sbi_rt::{NoReason, Shutdown, SystemFailure, system_reset};
+    if !failure {
+        system_reset(Shutdown, NoReason);
+    } else {
+        system_reset(Shutdown, SystemFailure);
+    }
+    unreachable!()
+}
+```
+返回值类型是`!`，是Never Type，意味着这个函数绝不允许返回。
+相同的还有`#[panic_handler]`标记的函数，返回值也必须是`!`
+`system_reset`调用后，控制权交给RustSBI，RustSBI会关闭机器，CPU停止工作，永远执行不到`unreachable!()`。
+但是Rust编译器更严谨，如果`system_reset`真的返回了，那么`unreachable!()`会触发panic，确保程序在这里结束。
