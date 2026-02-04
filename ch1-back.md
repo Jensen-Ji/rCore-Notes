@@ -620,3 +620,145 @@ pub fn shutdown(failure: bool) -> ! {
 相同的还有`#[panic_handler]`标记的函数，返回值也必须是`!`
 `system_reset`调用后，控制权交给RustSBI，RustSBI会关闭机器，CPU停止工作，永远执行不到`unreachable!()`。
 但是Rust编译器更严谨，如果`system_reset`真的返回了，那么`unreachable!()`会触发panic，确保程序在这里结束。
+
+修改main.rs中的main函数
+```Rust
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_main() -> ! {
+    clear_bss();
+    sbi::console_putchar('O' as usize);
+    sbi::console_putchar('k' as usize);
+    sbi::console_putchar('\n' as usize);
+    sbi::shutdown(false);
+}
+```
+然后make run，就能在终端看到输出内容，然后qemu关机
+```
+Ok
+```
+
+# 格式化输出
+
+如果仅使用console_putchar输出，太麻烦了。而且它只认识ASCII码。
+要实现格式化输出。
+
+在标准库不可用的裸机环境下，必须利用rust核心库提供的`core::fmt`模块，Rust编译器和核心库内置了强大的格式化逻辑，只要提供一个底层的字符写入接口，`core::fmt`就能自动处理格式化工作。
+
+接下来的任务就是实现接口：`core::fmt::Write` 
+
+新建os/src/console.rs文件
+```rust
+use core::fmt::{self, Write};
+
+struct Stdout;
+
+impl Write for Stdout {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for c in s.chars() {
+            crate::sbi::console_putchar(c as usize);
+        }
+        Ok(())
+    }
+}
+```
+
+`struct Stdout`是一个单元结构体，它没有字段，是空的。
+在Rust里，这种结构体被称为零大小类型，在运行时，Stdout完全不占用内存空间，编译器在优化阶段，会把所有设计Stdout的操作直接优化成函数调用，不会有任何传递结构体的开销。
+需要一个东西来代表控制台或者屏幕这个设备，因为不需要记录屏幕当前的状态，不需要缓冲区，不需要记录光标的位置，所以它不需要任何字段。
+它的意义就是一个载体，要在它身上实现Write这个Trait。
+
+`impl Write for Stdout`：给Stdout这个结构体实现Write这个Trait
+什么是Trait，Trait是一种能力，Write代表能被写入字符的能力。
+规定了任何想要打印能力的设备，必须提供一个`write_str`函数，用来接收字符串数据。并且只要实现了`write_str`，那么核心库core就会免费赠送`write_fmt`的实现，`write_fmt`就是专门负责调用`write_str`的。
+
+下一步是封装对外接口，宏不方便直接调用结构体的方法，所以要封装一个函数作为中间层。
+```Rust
+pub fn print(args:fmt::Arguments) {
+    Stdout.write_fmt(args).unwrap();
+}
+```
+`write_fmt`的工作是解析args里的格式占位符，把每一部分转换成字符串，然后多次调用`write_str`。
+`fmt::Arguments`：是一个结构体，是`format_args!`宏生成的产物，它是为了保证在没有操作系统、没有内存分配的情况下，依然能做复杂的格式化输出。
+
+下面是宏
+```rust
+#[macro_export]
+macro_rules! print {
+    ($fmt: literal $(, $($arg: tt)+)?) => {
+        $crate::console::print(format_args!($fmt $(, $($arg)+)?));
+    }
+}
+
+#[macro_export]
+macro_rules! println {
+    ($fmt: literal $(, $($arg: tt)+)?) => {
+        $crate::console::print(format_args!(concat!($fmt, "\n") $(, $($arg)+)?));
+    }
+}
+```
+`#[macro_export]`：默认情况下，宏只在定义它的模块里可见，加上这个属性，表示把这个宏导出到整个crate包的最顶层。
+`macro_rules! print`：定义声明宏的语法
+
+宏的核心是模式匹配和代码替换
+`($fmt:literal $(,$($arg:tt)+)?)`：这部分是正则表达式的变体
+- `$fmt：literal`是第一个参数，命名为`$fmt`，`:literal`是约束条件，表示这个参数必须是一个字面量，不能是变量。
+- `$(...)?`：`?`表示前面括号里的内容可以出现0次或1次。
+	- 如print!("hi")，这是没有后续参数。
+	- 如print!("hi",x)，有后续参数
+- `,`：逗号分隔符，格式化字符串后面必须紧跟一个逗号。
+- `$($arg: tt)+`：这是最内部的一层参数
+	- `$arg:tt`表示一个参数名为`$arg`，`:tt`表示token tree，是宏匹配中最强大的匹配器之一，几乎任何合法的Rust代码片段，如变量、表达式、函数调用等。
+	- `+`：重复，表示前面的$arg至少出现一次，且可以出现多次。
+意思是在调用宏时，必须先给一个字面量`$fmt`，后面可以跟一个逗号`,`和一堆参数`$arg`，也可以不跟。
+当编译器匹配成功后，会把代码替换为`=>`右边的样子
+`$crate::console::print(format_args!($fmt $(, $($arg)+)?));`
+- `$crate::console::print`：调用函数路径
+- `format_args!`：是Rust编译器内置的宏，它把`$fmt`和`$args`组合起来，生成前文提到的`fmt::Aruguments`结构体，它不拼接字符，不分配堆内存，只是负责打包整理。
+- `, $($arg)+)?`：把上面捕获到的参数，原封不动的塞进`format_args!`里，如果有参数，就放参数，没有参数就是空的。
+
+`format_args!(concat!($fmt, "\n") $(, $($arg)+)?)`：
+- `concat!($fmt, "\n")`：编译器宏，在编译时进行拼接
+`println!`比`print!`的区别就是在格式化字符串`$fmt`后拼接了一个换行符。
+
+用`print!("Hi {}","os")`举例子
+编译时，编译器看到这段代码，不会把它编译成生成一个字符串的代码，而是宏展开。如下是伪代码
+```
+{
+	let args = format_args!("hi,{}","os");
+	$crate::console::print(args);
+}
+```
+先由format_args!宏负责打包，然后调用封装的print函数。
+format_args!做了什么，它在编译期间分析字符串，发现它由两部分组成
+静态部分："hi, "
+动态部分：“os” 填充{}的位置
+编译器会生成指令，构建一个fmt::Arguments结构体
+编译器会把字符串都放在只读数据段，这部分内存是程序一启动就占用的。
+当CPU执行到第一行时，会在栈上创建一个fmt::Arguments结构体。这个结构体非常小，它不存放字符串的内容，存放的是引用（指针）。也就是字符串所在的地址。
+执行到print函数时，栈上的结构体被传给了print函数。在print函数内部，又调用write_fmt函数，参数传递给write_fmt函数，它不会把内容拼好，而是读取Arguments里的第一部分的指针，然后就去调用write_str函数打印指针指向的内容，然后读下一部分，看到第二部分是占位符{}，对应的数据是字符串"os"，再调用write_str函数打印"os"。
+
+# 处理致命错误
+
+现在系统遇到不可恢复的错误的处理方式，只是通过死循环让系统卡住。
+现在的目标让内核借助刚实现print!和shutdown函数，打印错误的信息并关机
+
+在lang_items.rs文件里进行修改
+```rust
+use crate::{println, sbi::shutdown};
+use core::panic::PanicInfo;
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    if let Some(location) = info.location() {
+        println!(
+            "Paniced at {}:{} {}",
+            location.file(),
+            location.line(),
+            info.message()
+        );
+    } else {
+        println!("{}", info.message());
+    }
+    shutdown(true)
+}
+```
