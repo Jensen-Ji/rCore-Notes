@@ -21,6 +21,75 @@ ch1的libos中，内核和应用是一体的（os.bin），这种架构有缺陷
 3. 实现特权级切换，APP在运行的时候，想打印（ecall）或者出错了，CPU会强制跳转到内核的特定位置，需要用汇编代码__restore和__alltraps来保存上下文。
 4. 管理执行流，APP1运行完，OS会把它清理掉，加载APP2。
 
+# 新建user/目录并实现user_lid库
+
+在架构里，os和user是两个在逻辑上完全隔离的世界。
+os运行在S模式，user运行在U模式
+先用命令`cargo build user --lib`构建user目录，因为OS需要加载应用程序，而应用程序需要依赖一个基础库user_lib才能运行。
+
+App -> **函数调用Call** -> user_lib -> **系统调用syscall/ecal**l -> kernel
+
+```plaintext
+├── os/                    # ch1写的内核
+├── user/                  # ch2新建的库
+│   ├── src/
+│   │   ├── bin/           # 存放各个 App (如 01hello.rs)
+│   │   ├── lib.rs         # User Lib 的核心
+│   │   ├── console.rs     # 用户态的打印实现
+│   │   ├── syscall.rs     # 系统调用接口
+│   │   └── linker.ld      # 用户程序的链接脚本
+│   └── Cargo.toml
+└── ...
+```
+
+在写lib.rs之前，先准备好系统调用的接口。
+lib.rs的核心工作就是启动程序->运行->调用系统接口退出。
+先写syscall.rs，让lib.rs有接口可以调用
+```rust
+use core::arch::asm;
+
+const SYSCALL_WRITE: usize = 64;
+const SYSCALL_EXIT: usize = 93;
+
+fn syscall(id: usize, args: [usize; 3]) -> isize {
+    let mut ret: isize;
+    unsafe {
+        asm! {
+            "ecall",
+            in("x17") id,
+            in("x10") args[0],
+            in("x11") args[1],
+            in("x12") args[2],
+            lateout("x10") ret
+        };
+    }
+    ret
+}
+
+pub fn sys_write(fd: usize, buffer: &[u8]) -> isize {
+    syscall(SYSCALL_WRITE, [fd, buffer.as_ptr() as usize, buffer.len()])
+}
+
+pub fn sys_exit(exit_code: i32) -> ! {
+    syscall(SYSCALL_EXIT, [exit_code as usize, 0, 0]);
+    panic!("sys_exit never returns!");
+}
+```
+`"ecall"`：是RISC-V的指令，CPU执行到这里，会暂停当前程序的执行，CPU的特权级从U模式提升到S模式，CPU跳转到内核预设的Trap处理入口，也就是内核处理中断的地方。
+`lateout("x10") ret`：告知编译器，在汇编代码执行结束后，物理寄存器x10，也就是a0寄存器，把它的值赋值给`ret`。out是输出，late表示在最后才被写入，意思是如果寄存器不够用，可以先用这个寄存器，最后把它空出来存结果就行。在这里x10寄存器既是用来输入也是用来输出。
+`panic!`：为什么还没实现panic_handler就可以用panic!，现在编译可以通过，但是链接不行，必须实现panic_handler才能链接成功。
+
+现在写lib.rs，这是库的核心，也是APP启动的入口。
+写app是代码从main函数开始写，但是CPU执行的第一行代码是_start
+
+
+
+
+
+
+
+
+
 
 
 
